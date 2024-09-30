@@ -1,5 +1,6 @@
-import random, os, dotenv, json, bs4, time, logging, playwright.sync_api as psa, playwright_stealth as stealth
+import random, os, dotenv, json, time, logging, urllib.parse as urlparse, playwright.sync_api as psa, playwright_stealth as stealth
 from curl_cffi import requests
+from requests import HTTPError
 
 
 # Steps
@@ -51,7 +52,7 @@ def rotate_header():
 def get_proxy_endpoint():
     yield from PROXIES
 
-def get_cookies(url, proxy, user, passw):
+def get_cookies(url: str, proxy: str, user: str, passw: str):
     logger.debug(f'Getting cookies from {url} through proxy {proxy}')
     with psa.sync_playwright() as p:
         browser = p.chromium.launch(proxy={'server': proxy, 'username': user, 'password': passw}, headless=False)
@@ -66,30 +67,49 @@ def get_cookies(url, proxy, user, passw):
         cookiejar[cookie['name']] = str(cookie['value'])
     return cookiejar
 
-# https://www.lazada.com.ph/catalog/?ajax=true&page=3&q=cleanser&spm=a2o4l.homepage.search.d_go
+# https://www.lazada.com.ph/tag/cream-of-tartar/?q=cream%20of%20tartar&catalog_redirect_tag=true
 # .ant-pagination-next
 # recaptchav2
 # nomorepages
 
-req_url = 'https://www.lazada.com.ph/catalog/?page=1&q=maple'
+req_url = 'https://www.lazada.com.ph/catalog/?page=1&q=cleanser'
 req_url2 = 'https://www.lazada.com.ph/catalog/?ajax=true&page=1&q=cleanser'
 headers = rotate_header()
 proxy = next(get_proxy_endpoint())
 
 
-def run_scraper(url, **kwargs):
-    pagination = kwargs.get('pagination', 1)
+
+# proxy_settings of form {proxy_url: <str>, proxy_user: <str>, proxy_passw: <str>}
+def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> None:
+    if item.find(' ') > -1:
+        tag_search = item.replace(' ', '-')
+        query_search = item.replace(' ', '%20')
+    else:
+        tag_search = item
+        query_search = item
     
+    front_url = f'https://www.lazada.com.ph/tag/{tag_search}/?q={query_search}&page={pagination}'
+    api_url = front_url + '&ajax=true'
+    noMorePages = False
+    newCookies = False
+    newSession = False
 
+    while not noMorePages:
+        if not newCookies:
+            cookie_jar = get_cookies(front_url, proxy_settings.get('proxy_url'), proxy_settings.get('proxy_user'), proxy_settings.get('proxy_passw'))
+            headers = rotate_header()
+            logger.debug(f'Obtained new cookies and new header = {headers}')
+        if not newSession:
+            curr_session = requests.Session()
+            logger.debug(f'Obtained new session')
+        
+        curr_session.cookies.update(cookie_jar)
+        curr_session.proxies = {'https': proxy_settings.get('proxy_url')}
+        curr_session.headers = headers
+        try:
+            response = curr_session.request('GET', api_url, impersonate='chrome')
+            response.raise_for_status()
+        except HTTPError:
+            pass
 
-with requests.Session() as session:
-    session.cookies.update(get_cookies(req_url, proxy, PROXY_USER, PROXY_PASS))
-    session.proxies = {'https': proxy}
-    session.headers = headers
-    logger.debug(f'GET request with headers {session.headers}')
-    response = session.request('GET', req_url2, impersonate='chrome')
-
-    with open('testfile.txt', 'w') as out:
-        out.write(json.dumps(response.json()))
-
-# If timeout then new proxy
+        # If timeout then new proxy
