@@ -1,4 +1,4 @@
-import random, os, dotenv, json, time, logging, urllib.parse as urlparse, playwright.sync_api as psa, playwright_stealth as stealth
+import random, os, dotenv, json, time, logging, warnings, playwright.sync_api as psa, playwright_stealth as stealth
 from curl_cffi import requests
 from requests import HTTPError
 
@@ -12,10 +12,11 @@ from requests import HTTPError
 
 DELAY_MEAN = 1
 DELAY_SD = 0.5
-ITEM_SEARCH = 'cleanser'
+DEFAULT_TIMEOUT = 60000
 PROXY_USER = os.getenv('PROXY_USER')
 PROXY_PASS = os.getenv('PROXY_PASS')
 
+warnings.filterwarnings('ignore', r'Make sure*', RuntimeWarning, module='curl_cffi')
 logger = logging.getLogger(__name__)
 logging.basicConfig()
 logger.setLevel(logging.DEBUG)
@@ -37,6 +38,7 @@ def rotate_header():
     logger.debug(f'Getting new header with agent {user_agent}')
     return {
         "User-Agent": user_agent,
+        "Connection": "keep-alive",
         "Accept-Encoding": "gzip, deflate, br, zstd",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept": "application/json, text/plain, */*",
@@ -45,71 +47,81 @@ def rotate_header():
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin",
-        "Priority": "u=0, i",
         "TE": "trailers"
     }
 
 def get_proxy_endpoint():
     yield from PROXIES
 
-def get_cookies(url: str, proxy: str, user: str, passw: str):
-    logger.debug(f'Getting cookies from {url} through proxy {proxy}')
+def get_cookies_headers(url: str, proxy: str, user: str, passw: str) -> list:
+    logger.debug(f'Getting browser data from {url} through proxy {proxy}')
     with psa.sync_playwright() as p:
-        browser = p.chromium.launch(proxy={'server': proxy, 'username': user, 'password': passw}, headless=False)
+        browser = p.firefox.launch(proxy={'server': proxy, 'username': user, 'password': passw}, headless=False)
         context = browser.new_context()
         page = context.new_page()
+        page.set_default_timeout(DEFAULT_TIMEOUT)
         stealth.stealth_sync(page)
         page.goto(url)
+        page.pause()
+        locator = page.locator('#X-CSRF-TOKEN')
+        csrf_token = locator.first.get_attribute('content')
         cookies = context.cookies()
         context.close()
     cookiejar = {}
     for cookie in cookies:
         cookiejar[cookie['name']] = str(cookie['value'])
-    return cookiejar
-
-# https://www.lazada.com.ph/tag/cream-of-tartar/?q=cream%20of%20tartar&catalog_redirect_tag=true
-# .ant-pagination-next
-# recaptchav2
-# nomorepages
-
-req_url = 'https://www.lazada.com.ph/catalog/?page=1&q=cleanser'
-req_url2 = 'https://www.lazada.com.ph/catalog/?ajax=true&page=1&q=cleanser'
-headers = rotate_header()
-proxy = next(get_proxy_endpoint())
+    return {'cookiejar': cookiejar, 'csrf_token': csrf_token}
 
 
-
-# proxy_settings of form {proxy_url: <str>, proxy_user: <str>, proxy_passw: <str>}
+# proxy_settings of form {proxy_url: <str> | gen, proxy_user: <str>, proxy_passw: <str>}
 def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> None:
     if item.find(' ') > -1:
         tag_search = item.replace(' ', '-')
         query_search = item.replace(' ', '%20')
     else:
-        tag_search = item
-        query_search = item
+        tag_search = query_search = item
     
-    front_url = f'https://www.lazada.com.ph/tag/{tag_search}/?q={query_search}&page={pagination}'
-    api_url = front_url + '&ajax=true'
+    html_url = f'https://www.lazada.com.ph/tag/{tag_search}/?spm=a2o4l.homepage.search.d_go&q={query_search}'
+    scrape_data = []
     noMorePages = False
-    newCookies = False
     newSession = False
 
     while not noMorePages:
-        if not newCookies:
-            cookie_jar = get_cookies(front_url, proxy_settings.get('proxy_url'), proxy_settings.get('proxy_user'), proxy_settings.get('proxy_passw'))
-            headers = rotate_header()
-            logger.debug(f'Obtained new cookies and new header = {headers}')
+        api_url = f'https://www.lazada.com.ph/tag/{tag_search}/?ajax=true&page={pagination}&q={query_search}&spm=a2o4l.homepage.search.d_go'
+        
         if not newSession:
+            proxy = proxy_settings.get('proxy_url')
+            if callable(proxy):
+                proxy = next(proxy())
+            browser_data = get_cookies_headers(html_url, proxy, proxy_settings.get('proxy_user'), proxy_settings.get('proxy_passw'))
+            headers = rotate_header()
+            headers['X-CSRF-TOKEN'] = browser_data['csrf_token']
+            logger.debug(f'Obtained new cookies and new header = {headers}')
             curr_session = requests.Session()
             logger.debug(f'Obtained new session')
-        
-        curr_session.cookies.update(cookie_jar)
-        curr_session.proxies = {'https': proxy_settings.get('proxy_url')}
-        curr_session.headers = headers
+            curr_session.cookies.update(browser_data['cookiejar'])
+            curr_session.proxies = {'https': proxy}
+            curr_session.headers = headers
+            newSession = True
+
         try:
+            random_delay()
             response = curr_session.request('GET', api_url, impersonate='chrome')
             response.raise_for_status()
-        except HTTPError:
-            pass
+        except HTTPError as e:
+            logger.error(f'Failed to get from API with due to {e.strerror}', exc_info=True)
+        
+        response_json = response.json()
+        random_delay()
+        scrape_data.append(response_json)
+        
+        noMorePages = response_json['mainInfo'].get('noMorePages')
+        pagination += 1
+    
+    with open('data.txt', 'w') as output:
+        output.write(json.dumps(scrape_data))
 
-        # If timeout then new proxy
+    # If timeout then new proxy
+
+proxy_settings = {'proxy_url': get_proxy_endpoint, 'proxy_user': PROXY_USER, 'proxy_passw': PROXY_PASS}
+run_scraper('ketchup', proxy_settings)
