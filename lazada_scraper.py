@@ -10,8 +10,8 @@ from requests import HTTPError
 # 3. store in file db
 #       a. identify schema
 
-DELAY_MEAN = 1
-DELAY_SD = 0.5
+DELAY_MEAN = 2
+DELAY_SD = 0.1
 DEFAULT_TIMEOUT = 60000
 PROXY_USER = os.getenv('PROXY_USER')
 PROXY_PASS = os.getenv('PROXY_PASS')
@@ -37,17 +37,19 @@ def rotate_header():
     user_agent = random.choice(agents_list)
     logger.debug(f'Getting new header with agent {user_agent}')
     return {
-        "User-Agent": user_agent,
-        "Connection": "keep-alive",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept": "application/json, text/plain, */*",
-        "Host": "www.lazada.com.ph",
-        "Referer": "https://www.lazada.com.ph/",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "TE": "trailers"
+        "accept": "application/json, text/plain, */*",
+        "accept-encoding": "gzip, deflate, br, zstd",
+        "accept-language": "en-US,en;q=0.9,id;q=0.8",
+        "dnt": "1",
+        "priority": "u=1, i",
+        "referer": "https://www.lazada.com.ph/",
+        "sec-ch-ua": "\"Google Chrome\";v=\"129\", \"Not=A?Brand\";v=\"8\", \"Chromium\";v=\"129\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "user-agent": user_agent
     }
 
 def get_proxy_endpoint():
@@ -63,8 +65,10 @@ def get_cookies_headers(url: str, proxy: str, user: str, passw: str) -> list:
         stealth.stealth_sync(page)
         page.goto(url)
         page.pause()
-        locator = page.locator('#X-CSRF-TOKEN')
-        csrf_token = locator.first.get_attribute('content')
+        csrf_locator = page.locator('#X-CSRF-TOKEN')
+        for i in range(csrf_locator.count()):
+            csrf_token = csrf_locator.nth(i).get_attribute('content')
+            if csrf_token: break
         cookies = context.cookies()
         context.close()
     cookiejar = {}
@@ -75,24 +79,26 @@ def get_cookies_headers(url: str, proxy: str, user: str, passw: str) -> list:
 
 # proxy_settings of form {proxy_url: <str> | gen, proxy_user: <str>, proxy_passw: <str>}
 def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> None:
+    start_time = time.time()
     if item.find(' ') > -1:
         tag_search = item.replace(' ', '-')
         query_search = item.replace(' ', '%20')
     else:
         tag_search = query_search = item
     
-    html_url = f'https://www.lazada.com.ph/tag/{tag_search}/?spm=a2o4l.homepage.search.d_go&q={query_search}'
+    html_url = f'https://www.lazada.com.ph/tag/{tag_search}/?spm=a2o4l.homepage.search.d_go&q={query_search}&catalog_redirect_tag=true'
     scrape_data = []
     noMorePages = False
     newSession = False
 
     while not noMorePages:
-        api_url = f'https://www.lazada.com.ph/tag/{tag_search}/?ajax=true&page={pagination}&q={query_search}&spm=a2o4l.homepage.search.d_go'
+        api_url = f'https://www.lazada.com.ph/tag/{tag_search}/?ajax=true&catalog_redirect_tag=true&page={pagination}&q={query_search}&spm=a2o4l.homepage.search.d_go'
         
         if not newSession:
             proxy = proxy_settings.get('proxy_url')
             if callable(proxy):
                 proxy = next(proxy())
+            logger.info(f'Opening browser... Answer any CAPTCHAs that may appear during this time. Press "Resume" in Playwright inspector to continue execution after answering CAPTCHA')
             browser_data = get_cookies_headers(html_url, proxy, proxy_settings.get('proxy_user'), proxy_settings.get('proxy_passw'))
             headers = rotate_header()
             headers['X-CSRF-TOKEN'] = browser_data['csrf_token']
@@ -113,15 +119,23 @@ def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> 
         
         response_json = response.json()
         random_delay()
+        try:
+            noMorePages = response_json['mainInfo'].get('noMorePages')
+        except KeyError:
+            logger.error(f'Response JSON has no key "mainInfo". Possible that scraper is detected. Renewing session...')
+            newSession = False
+            continue
         scrape_data.append(response_json)
         
-        noMorePages = response_json['mainInfo'].get('noMorePages')
+        logger.info(f'Successfully scraped data from API in page {pagination}')
         pagination += 1
+        
     
     with open('data.txt', 'w') as output:
         output.write(json.dumps(scrape_data))
+    end_time = time.time()
+    logger.info(f'Done scraping data for query in {end_time - start_time} seconds')
 
-    # If timeout then new proxy
 
 proxy_settings = {'proxy_url': get_proxy_endpoint, 'proxy_user': PROXY_USER, 'proxy_passw': PROXY_PASS}
-run_scraper('ketchup', proxy_settings)
+run_scraper('face cleanser', proxy_settings)
