@@ -90,6 +90,7 @@ def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> 
     scrape_data = []
     noMorePages = False
     newSession = False
+    totalPages = None
 
     while not noMorePages:
         api_url = f'https://www.lazada.com.ph/tag/{tag_search}/?ajax=true&catalog_redirect_tag=true&page={pagination}&q={query_search}&spm=a2o4l.homepage.search.d_go'
@@ -121,15 +122,17 @@ def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> 
         random_delay()
         try:
             noMorePages = response_json['mainInfo'].get('noMorePages')
+            if totalPages is None:
+                totalPages = response_json['mainInfo'].get('totalResults') / response_json['mainInfo'].get('pageSize')
         except KeyError:
             logger.error(f'Response JSON has no key "mainInfo". Possible that scraper is detected. Renewing session...')
             newSession = False
             continue
         scrape_data.append(response_json)
         
-        logger.info(f'Successfully scraped data from API in page {pagination}')
+        logger.info(f'Successfully scraped data from API in page {pagination} out of {totalPages:.0f} pages')
         pagination += 1
-        
+    
     
     with open('data.txt', 'w') as output:
         output.write(json.dumps(scrape_data))
