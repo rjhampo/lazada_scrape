@@ -78,7 +78,7 @@ def get_cookies_headers(url: str, proxy: str, user: str, passw: str) -> list:
 
 
 # proxy_settings of form {proxy_url: <str> | gen, proxy_user: <str>, proxy_passw: <str>}
-def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> None:
+def run_page_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> list:
     start_time = time.time()
     if item.find(' ') > -1:
         tag_search = item.replace(' ', '-')
@@ -134,11 +134,13 @@ def run_scraper(item: str, proxy_settings: dict, pagination: int | None = 1) -> 
         pagination += 1
     
     
-    with open('data.txt', 'w') as output:
+    with open('page_data.txt', 'w') as output:
         output.write(json.dumps(scrape_data))
     end_time = time.time()
     logger.info(f'Done scraping data for query in {end_time - start_time} seconds')
 
+    return scrape_data
+
 
 proxy_settings = {'proxy_url': get_proxy_endpoint, 'proxy_user': PROXY_USER, 'proxy_passw': PROXY_PASS}
-run_scraper('face cleanser', proxy_settings)
+run_page_scraper('face cleanser', proxy_settings)
