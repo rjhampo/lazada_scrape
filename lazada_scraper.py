@@ -1,4 +1,6 @@
-import random, os, dotenv, json, time, logging, warnings, playwright.sync_api as psa, playwright_stealth as stealth
+import random, os, dotenv, json, time, logging, warnings
+from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 from curl_cffi import requests
 from requests import HTTPError
 
@@ -57,12 +59,11 @@ def get_proxy_endpoint():
 
 def get_cookies_headers(url: str, proxy: str, user: str, passw: str) -> list:
     logger.debug(f'Getting browser data from {url} through proxy {proxy}')
-    with psa.sync_playwright() as p:
+    with Stealth().use_sync(sync_playwright()) as p:
         browser = p.firefox.launch(proxy={'server': proxy, 'username': user, 'password': passw}, headless=False)
         context = browser.new_context()
         page = context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT)
-        stealth.stealth_sync(page)
         page.goto(url)
         page.pause()
         csrf_locator = page.locator('#X-CSRF-TOKEN')
