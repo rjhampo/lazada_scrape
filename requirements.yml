@@ -1,3 +1,6 @@
+# IMPORTANT
+# Patch playwright with rebrowser-patches to disable Chrome Dev Tools (CDP)
+
 name: ecomm
 channels:
   - conda-forge

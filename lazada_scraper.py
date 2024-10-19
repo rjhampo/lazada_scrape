@@ -129,7 +129,7 @@ def run_page_scraper(item: str, proxy_settings: dict, pagination: int | None = 1
         try:
             noMorePages = response_json['mainInfo'].get('noMorePages')
             if totalPages is None:
-                totalPages = response_json['mainInfo'].get('totalResults') / response_json['mainInfo'].get('pageSize')
+                totalPages = int(response_json['mainInfo'].get('totalResults')) / int(response_json['mainInfo'].get('pageSize'))
         except KeyError:
             logger.error(f'Response JSON has no key "mainInfo". Possible that scraper is detected. Renewing session...')
             curr_session.close()
